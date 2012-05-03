@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<layman>
+	<overlay
+		type="git"
+		src="git://github.com/drscream/gentoo-overlay.git"
+		contact="https://github.com/drscream"
+		name="drscream-gentoo-overlay"
+		status="unofficial">
+		<link>https://github.com/drscream/gentoo-overlay</link>
+		<description>drscream gentoo overlay</description>
+	</overlay>
+</layman>
