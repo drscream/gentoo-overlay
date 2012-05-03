@@ -1,0 +1,528 @@
+diff -ruN /tmp/old/vmmon-only/include/compat_wait.h ./vmmon-only/include/compat_wait.h
+--- /tmp/old/vmmon-only/include/compat_wait.h	2009-01-19 21:10:47.000000000 -0700
++++ ./vmmon-only/include/compat_wait.h	2009-01-19 21:04:07.000000000 -0700
+@@ -75,7 +75,11 @@
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 0) // {
+ 
+ /* If prototype does not match, build will abort here */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+ extern void poll_initwait(compat_poll_wqueues *);
++#else
++extern void poll_initwait(struct poll_wqueues *pwq);
++#endif
+ 
+ #define compat_poll_initwait(wait, table) ( \
+    (wait) = (table), \
+diff -ruN /tmp/old/vmmon-only/include/x86apic.h ./vmmon-only/include/x86apic.h
+--- /tmp/old/vmmon-only/include/x86apic.h	2009-01-19 21:10:47.000000000 -0700
++++ ./vmmon-only/include/x86apic.h	2009-01-19 21:04:07.000000000 -0700
+@@ -94,7 +94,11 @@
+ #define APIC_LVT_DELVMODE(_lvt) (_lvt & 0x700)
+ #define APIC_LVT_RESET_VALUE  0x00010000
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+ #define APIC_BASE_MSR         0x1b
++#else
++#define APIC_BASE_MSR	      0x800
++#endif
+ 
+ #define APIC_MSR_BASEMASK     QWORD(0x0000000f,0xfffff000)
+ #define APIC_MSR_ENABLED      0x00000800
+diff -ruN /tmp/old/vmmon-only/linux/driver.c ./vmmon-only/linux/driver.c
+--- /tmp/old/vmmon-only/linux/driver.c	2009-01-19 21:10:47.000000000 -0700
++++ ./vmmon-only/linux/driver.c	2009-01-19 21:04:07.000000000 -0700
+@@ -1984,10 +1984,17 @@
+    }
+ 
+    case IOCTL_VMX86_ALLOW_CORE_DUMP:
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+       if (current->euid == current->uid &&
+ 	  current->fsuid == current->uid &&
+           current->egid == current->gid &&
+ 	  current->fsgid == current->gid) {
++#else /* 2.6.29 and higher */
++      if (current->cred->euid == current->cred->uid &&
++          current->cred->fsuid == current->cred->uid &&
++          current->cred->egid == current->cred->gid &&
++          current->cred->fsgid == current->cred->gid) {
++#endif /* 2.6.29 check */
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 23) || defined(MMF_DUMPABLE)
+          /* Dump core, readable by user. */
+          set_bit(MMF_DUMPABLE, &current->mm->flags);
+diff -ruN /tmp/old/vmmon-only/linux/hostif.c ./vmmon-only/linux/hostif.c
+--- /tmp/old/vmmon-only/linux/hostif.c	2009-01-19 21:10:47.000000000 -0700
++++ ./vmmon-only/linux/hostif.c	2009-01-19 21:04:07.000000000 -0700
+@@ -2718,13 +2718,22 @@
+    set_fs(get_ds());
+ 
+    {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+       compat_poll_wqueues table;
+       poll_table *wait;
++#else /* 2.6.29 and above */
++      struct poll_wqueues table;
++      struct poll_wqueues *wait;
++#endif /* 2.6.29 and above */
+       unsigned int mask;
+       
+       compat_poll_initwait(wait, &table);
+       current->state = TASK_INTERRUPTIBLE;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+       mask = file->f_op->poll(file, wait);
++#else
++      mask = file->f_op->poll(file, (poll_table *) wait);
++#endif /* 2.6.29 */
+       if (!(mask & (POLLIN | POLLERR | POLLHUP))) {
+ #ifdef KERNEL_2_4_0
+ 	 vm->vmhost->vcpuSemaTask[vcpuid] = current;
+@@ -2743,7 +2752,6 @@
+    }
+ 
+    res = file->f_op->read(file, &ch, 1, &file->f_pos);
+-
+    set_fs(old_fs);
+    compat_fput(file);
+ 
+@@ -3455,8 +3463,13 @@
+    oldFS = get_fs();
+    set_fs(KERNEL_DS);
+    compat_allow_signal(SIGKILL);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29) 
+    cap_raise(current->cap_effective, CAP_SYS_RESOURCE);
+    compat_set_user_nice(current, linuxState.fastClockPriority);
++#else /* 2.6.29 */
++   (void) cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
++   set_user_nice(current, linuxState.fastClockPriority);
++#endif /* 2.6.29 and higher */   
+ 
+    while (linuxState.fastClockRate > HZ + HZ/16) {
+       unsigned long buf;
+@@ -3579,19 +3592,38 @@
+          Bool cap;
+          long pid;
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+          fsuid = current->fsuid;
+          current->fsuid = 0;
++#else
++	 fsuid = current->cred->fsuid;
++#warning	 current->cred->fsuid = 0;
++#endif /* 2.6.29 */
+          filp = filp_open("/dev/rtc", O_RDONLY, 0);
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+          current->fsuid = fsuid;
++#else
++#warning	 current->cred->fsuid = fsuid;
++#endif /* 2.6.29 */
+          if (IS_ERR(filp)) {
+             Warning("/dev/rtc open failed: %d\n", (int)(VA)filp);
+             return -(int)(VA)filp;
+          }
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+          cap = cap_raised(current->cap_effective, CAP_SYS_RESOURCE);
+          cap_raise(current->cap_effective, CAP_SYS_RESOURCE);
++#else /* 2.6.29 */
++         cap = cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
++         (void) cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
++#endif /* 2.6.29 */
+          res = HostIFDoIoctl(filp, RTC_PIE_ON, 0);
+          if (!cap) {
+-            cap_lower(current->cap_effective, CAP_SYS_RESOURCE);            
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++            cap_lower(current->cap_effective, CAP_SYS_RESOURCE);
++#else
++#warning	    cap_lower(current->cred->cap_effective, CAP_SYS_RESOURCE);
++#endif /* 2.6.29 */        
+          }
+          if (res < 0) {
+             Warning("/dev/rtc enable interrupt failed: %d\n", res);
+diff -ruN /tmp/old/vmmon-only/linux/vmmonInt.h ./vmmon-only/linux/vmmonInt.h
+--- /tmp/old/vmmon-only/linux/vmmonInt.h	2009-01-19 21:10:47.000000000 -0700
++++ ./vmmon-only/linux/vmmonInt.h	2009-01-19 21:04:07.000000000 -0700
+@@ -46,7 +46,10 @@
+ #endif
+ 
+ #if defined(CONFIG_SMP) && LINUX_VERSION_CODE >= KERNEL_VERSION(2, 2, 8)
+-#ifdef VMW_HAVE_SMP_CALL_3ARG
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
++#define VMW_HAVE_SMP_CALL_3ARG
++#endif
++#ifdef VMW_HAVE_SMP_CALL_3ARG 
+ #define compat_smp_call_function(fn, info, wait) smp_call_function(fn, info, wait)
+ #else
+ #define compat_smp_call_function(fn, info, wait) smp_call_function(fn, info, 1, wait)
+diff -ruN /tmp/old/vmmon-only/modules.order ./vmmon-only/modules.order
+--- /tmp/old/vmmon-only/modules.order	1969-12-31 17:00:00.000000000 -0700
++++ ./vmmon-only/modules.order	2009-01-19 21:04:07.000000000 -0700
+@@ -0,0 +1 @@
++kernel//usr/lib/vmware/modules/source/vmmon-only/vmmon.ko
+diff -ruN /tmp/old/vmnet-only/bridge.c ./vmnet-only/bridge.c
+--- /tmp/old/vmnet-only/bridge.c	2009-01-19 21:10:51.000000000 -0700
++++ ./vmnet-only/bridge.c	2009-01-19 21:04:07.000000000 -0700
+@@ -646,7 +646,11 @@
+ 	 dev_unlock_list();
+       } else {
+ 	 struct sock *sk = bridge->sk;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+ 	 atomic_add(skb->truesize, &sk->sk_wmem_alloc);
++#else
++#warning EHUD gotta figure out what this does and how to fix it: atomic_add(skb->truesize, &sk->sk_wmem_alloc);
++#endif /* 2.6.29 */
+ 	 clone->sk = sk;
+ 	 clone->protocol = ((struct ethhdr *)skb->data)->h_proto; // XXX
+ 	 if ((dev->flags & IFF_UP) != 0) {
+diff -ruN /tmp/old/vmnet-only/compat_wait.h ./vmnet-only/compat_wait.h
+--- /tmp/old/vmnet-only/compat_wait.h	2009-01-19 21:10:51.000000000 -0700
++++ ./vmnet-only/compat_wait.h	2009-01-19 21:04:07.000000000 -0700
+@@ -75,7 +75,11 @@
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 0) // {
+ 
+ /* If prototype does not match, build will abort here */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+ extern void poll_initwait(compat_poll_wqueues *);
++#else /* 2.6.29 */
++extern void poll_initwait(struct poll_wqueues *);
++#endif /* 2.6.29 */
+ 
+ #define compat_poll_initwait(wait, table) ( \
+    (wait) = (table), \
+diff -ruN /tmp/old/vmnet-only/driver.c ./vmnet-only/driver.c
+--- /tmp/old/vmnet-only/driver.c	2009-01-19 21:10:51.000000000 -0700
++++ ./vmnet-only/driver.c	2009-01-19 21:04:07.000000000 -0700
+@@ -146,6 +146,13 @@
+    .owner    = THIS_MODULE,
+    .obj_size = sizeof(struct sock),
+ };
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
++struct proto vmnet_proto = {
++   .name     = "VMNET",
++   .owner    = THIS_MODULE,
++   .obj_size = sizeof(struct sock),
++};
++
+ #endif
+ 
+ /*
+diff -ruN /tmp/old/vmnet-only/modules.order ./vmnet-only/modules.order
+--- /tmp/old/vmnet-only/modules.order	1969-12-31 17:00:00.000000000 -0700
++++ ./vmnet-only/modules.order	2009-01-19 21:04:07.000000000 -0700
+@@ -0,0 +1 @@
++kernel//usr/lib/vmware/modules/source/vmnet-only/vmnet.ko
+diff -ruN /tmp/old/vmnet-only/netif.c ./vmnet-only/netif.c
+--- /tmp/old/vmnet-only/netif.c	2009-01-19 21:10:51.000000000 -0700
++++ ./vmnet-only/netif.c	2009-01-19 21:04:07.000000000 -0700
+@@ -324,7 +324,10 @@
+       goto out;
+    }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+    dev->priv = netIf;
++#endif /* 2.6.29 */
++ 
+    netIf->dev = dev;
+    
+    memcpy(dev->dev_addr, netIf->port.paddr, sizeof netIf->port.paddr);
+@@ -566,7 +569,11 @@
+ VNetNetifStartXmit(struct sk_buff    *skb, // IN:
+                    struct net_device *dev) // IN:
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
++#else
++   VNetNetIF *netIf = netdev_priv(dev);
++#endif /* 2.6.29 */
+ 
+    if(skb == NULL) {
+       return 0;
+@@ -618,7 +625,12 @@
+ VNetNetifSetMAC(struct net_device *dev, // IN:
+                 void *p)                // IN:
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
++#else
++   VNetNetIF *netIf = netdev_priv(dev);
++#endif /* 2.6.29 */
++
+    struct sockaddr const *addr = p;
+    if (!VMX86_IS_STATIC_MAC(addr->sa_data)) {
+       return -EINVAL;
+@@ -675,7 +687,11 @@
+ struct net_device_stats *
+ VNetNetifGetStats(struct net_device *dev) // IN:
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
++#else
++   VNetNetIF *netIf = netdev_priv(dev);
++#endif /* 2.6.29 */
+    return &(netIf->stats);
+ }
+ 
+diff -ruN /tmp/old/vmware-2.6.29-rc1.patch ./vmware-2.6.29-rc1.patch
+--- /tmp/old/vmware-2.6.29-rc1.patch	1969-12-31 17:00:00.000000000 -0700
++++ ./vmware-2.6.29-rc1.patch	2009-01-19 21:11:27.000000000 -0700
+@@ -0,0 +1,262 @@
++diff -ruN /tmp/old/vmmon-only/include/compat_wait.h ./vmmon-only/include/compat_wait.h
++--- /tmp/old/vmmon-only/include/compat_wait.h	2009-01-19 21:10:47.000000000 -0700
+++++ ./vmmon-only/include/compat_wait.h	2009-01-19 21:04:07.000000000 -0700
++@@ -75,7 +75,11 @@
++ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 0) // {
++ 
++ /* If prototype does not match, build will abort here */
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++ extern void poll_initwait(compat_poll_wqueues *);
+++#else
+++extern void poll_initwait(struct poll_wqueues *pwq);
+++#endif
++ 
++ #define compat_poll_initwait(wait, table) ( \
++    (wait) = (table), \
++diff -ruN /tmp/old/vmmon-only/include/x86apic.h ./vmmon-only/include/x86apic.h
++--- /tmp/old/vmmon-only/include/x86apic.h	2009-01-19 21:10:47.000000000 -0700
+++++ ./vmmon-only/include/x86apic.h	2009-01-19 21:04:07.000000000 -0700
++@@ -94,7 +94,11 @@
++ #define APIC_LVT_DELVMODE(_lvt) (_lvt & 0x700)
++ #define APIC_LVT_RESET_VALUE  0x00010000
++ 
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
++ #define APIC_BASE_MSR         0x1b
+++#else
+++#define APIC_BASE_MSR	      0x800
+++#endif
++ 
++ #define APIC_MSR_BASEMASK     QWORD(0x0000000f,0xfffff000)
++ #define APIC_MSR_ENABLED      0x00000800
++diff -ruN /tmp/old/vmmon-only/linux/driver.c ./vmmon-only/linux/driver.c
++--- /tmp/old/vmmon-only/linux/driver.c	2009-01-19 21:10:47.000000000 -0700
+++++ ./vmmon-only/linux/driver.c	2009-01-19 21:04:07.000000000 -0700
++@@ -1984,10 +1984,17 @@
++    }
++ 
++    case IOCTL_VMX86_ALLOW_CORE_DUMP:
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++       if (current->euid == current->uid &&
++ 	  current->fsuid == current->uid &&
++           current->egid == current->gid &&
++ 	  current->fsgid == current->gid) {
+++#else /* 2.6.29 and higher */
+++      if (current->cred->euid == current->cred->uid &&
+++          current->cred->fsuid == current->cred->uid &&
+++          current->cred->egid == current->cred->gid &&
+++          current->cred->fsgid == current->cred->gid) {
+++#endif /* 2.6.29 check */
++ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 23) || defined(MMF_DUMPABLE)
++          /* Dump core, readable by user. */
++          set_bit(MMF_DUMPABLE, &current->mm->flags);
++diff -ruN /tmp/old/vmmon-only/linux/hostif.c ./vmmon-only/linux/hostif.c
++--- /tmp/old/vmmon-only/linux/hostif.c	2009-01-19 21:10:47.000000000 -0700
+++++ ./vmmon-only/linux/hostif.c	2009-01-19 21:04:07.000000000 -0700
++@@ -2718,13 +2718,22 @@
++    set_fs(get_ds());
++ 
++    {
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++       compat_poll_wqueues table;
++       poll_table *wait;
+++#else /* 2.6.29 and above */
+++      struct poll_wqueues table;
+++      struct poll_wqueues *wait;
+++#endif /* 2.6.29 and above */
++       unsigned int mask;
++       
++       compat_poll_initwait(wait, &table);
++       current->state = TASK_INTERRUPTIBLE;
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++       mask = file->f_op->poll(file, wait);
+++#else
+++      mask = file->f_op->poll(file, (poll_table *) wait);
+++#endif /* 2.6.29 */
++       if (!(mask & (POLLIN | POLLERR | POLLHUP))) {
++ #ifdef KERNEL_2_4_0
++ 	 vm->vmhost->vcpuSemaTask[vcpuid] = current;
++@@ -2743,7 +2752,6 @@
++    }
++ 
++    res = file->f_op->read(file, &ch, 1, &file->f_pos);
++-
++    set_fs(old_fs);
++    compat_fput(file);
++ 
++@@ -3455,8 +3463,13 @@
++    oldFS = get_fs();
++    set_fs(KERNEL_DS);
++    compat_allow_signal(SIGKILL);
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29) 
++    cap_raise(current->cap_effective, CAP_SYS_RESOURCE);
++    compat_set_user_nice(current, linuxState.fastClockPriority);
+++#else /* 2.6.29 */
+++   (void) cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
+++   set_user_nice(current, linuxState.fastClockPriority);
+++#endif /* 2.6.29 and higher */   
++ 
++    while (linuxState.fastClockRate > HZ + HZ/16) {
++       unsigned long buf;
++@@ -3579,19 +3592,38 @@
++          Bool cap;
++          long pid;
++ 
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++          fsuid = current->fsuid;
++          current->fsuid = 0;
+++#else
+++	 fsuid = current->cred->fsuid;
+++#warning	 current->cred->fsuid = 0;
+++#endif /* 2.6.29 */
++          filp = filp_open("/dev/rtc", O_RDONLY, 0);
+++
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++          current->fsuid = fsuid;
+++#else
+++#warning	 current->cred->fsuid = fsuid;
+++#endif /* 2.6.29 */
++          if (IS_ERR(filp)) {
++             Warning("/dev/rtc open failed: %d\n", (int)(VA)filp);
++             return -(int)(VA)filp;
++          }
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++          cap = cap_raised(current->cap_effective, CAP_SYS_RESOURCE);
++          cap_raise(current->cap_effective, CAP_SYS_RESOURCE);
+++#else /* 2.6.29 */
+++         cap = cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
+++         (void) cap_raised(current->cred->cap_effective, CAP_SYS_RESOURCE);
+++#endif /* 2.6.29 */
++          res = HostIFDoIoctl(filp, RTC_PIE_ON, 0);
++          if (!cap) {
++-            cap_lower(current->cap_effective, CAP_SYS_RESOURCE);            
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
+++            cap_lower(current->cap_effective, CAP_SYS_RESOURCE);
+++#else
+++#warning	    cap_lower(current->cred->cap_effective, CAP_SYS_RESOURCE);
+++#endif /* 2.6.29 */        
++          }
++          if (res < 0) {
++             Warning("/dev/rtc enable interrupt failed: %d\n", res);
++diff -ruN /tmp/old/vmmon-only/linux/vmmonInt.h ./vmmon-only/linux/vmmonInt.h
++--- /tmp/old/vmmon-only/linux/vmmonInt.h	2009-01-19 21:10:47.000000000 -0700
+++++ ./vmmon-only/linux/vmmonInt.h	2009-01-19 21:04:07.000000000 -0700
++@@ -46,7 +46,10 @@
++ #endif
++ 
++ #if defined(CONFIG_SMP) && LINUX_VERSION_CODE >= KERNEL_VERSION(2, 2, 8)
++-#ifdef VMW_HAVE_SMP_CALL_3ARG
+++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+++#define VMW_HAVE_SMP_CALL_3ARG
+++#endif
+++#ifdef VMW_HAVE_SMP_CALL_3ARG 
++ #define compat_smp_call_function(fn, info, wait) smp_call_function(fn, info, wait)
++ #else
++ #define compat_smp_call_function(fn, info, wait) smp_call_function(fn, info, 1, wait)
++diff -ruN /tmp/old/vmmon-only/modules.order ./vmmon-only/modules.order
++--- /tmp/old/vmmon-only/modules.order	1969-12-31 17:00:00.000000000 -0700
+++++ ./vmmon-only/modules.order	2009-01-19 21:04:07.000000000 -0700
++@@ -0,0 +1 @@
+++kernel//usr/lib/vmware/modules/source/vmmon-only/vmmon.ko
++diff -ruN /tmp/old/vmnet-only/bridge.c ./vmnet-only/bridge.c
++--- /tmp/old/vmnet-only/bridge.c	2009-01-19 21:10:51.000000000 -0700
+++++ ./vmnet-only/bridge.c	2009-01-19 21:04:07.000000000 -0700
++@@ -646,7 +646,11 @@
++ 	 dev_unlock_list();
++       } else {
++ 	 struct sock *sk = bridge->sk;
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++ 	 atomic_add(skb->truesize, &sk->sk_wmem_alloc);
+++#else
+++#warning EHUD gotta figure out what this does and how to fix it: atomic_add(skb->truesize, &sk->sk_wmem_alloc);
+++#endif /* 2.6.29 */
++ 	 clone->sk = sk;
++ 	 clone->protocol = ((struct ethhdr *)skb->data)->h_proto; // XXX
++ 	 if ((dev->flags & IFF_UP) != 0) {
++diff -ruN /tmp/old/vmnet-only/compat_wait.h ./vmnet-only/compat_wait.h
++--- /tmp/old/vmnet-only/compat_wait.h	2009-01-19 21:10:51.000000000 -0700
+++++ ./vmnet-only/compat_wait.h	2009-01-19 21:04:07.000000000 -0700
++@@ -75,7 +75,11 @@
++ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 0) // {
++ 
++ /* If prototype does not match, build will abort here */
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++ extern void poll_initwait(compat_poll_wqueues *);
+++#else /* 2.6.29 */
+++extern void poll_initwait(struct poll_wqueues *);
+++#endif /* 2.6.29 */
++ 
++ #define compat_poll_initwait(wait, table) ( \
++    (wait) = (table), \
++diff -ruN /tmp/old/vmnet-only/driver.c ./vmnet-only/driver.c
++--- /tmp/old/vmnet-only/driver.c	2009-01-19 21:10:51.000000000 -0700
+++++ ./vmnet-only/driver.c	2009-01-19 21:04:07.000000000 -0700
++@@ -146,6 +146,13 @@
++    .owner    = THIS_MODULE,
++    .obj_size = sizeof(struct sock),
++ };
+++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+++struct proto vmnet_proto = {
+++   .name     = "VMNET",
+++   .owner    = THIS_MODULE,
+++   .obj_size = sizeof(struct sock),
+++};
+++
++ #endif
++ 
++ /*
++diff -ruN /tmp/old/vmnet-only/modules.order ./vmnet-only/modules.order
++--- /tmp/old/vmnet-only/modules.order	1969-12-31 17:00:00.000000000 -0700
+++++ ./vmnet-only/modules.order	2009-01-19 21:04:07.000000000 -0700
++@@ -0,0 +1 @@
+++kernel//usr/lib/vmware/modules/source/vmnet-only/vmnet.ko
++diff -ruN /tmp/old/vmnet-only/netif.c ./vmnet-only/netif.c
++--- /tmp/old/vmnet-only/netif.c	2009-01-19 21:10:51.000000000 -0700
+++++ ./vmnet-only/netif.c	2009-01-19 21:04:07.000000000 -0700
++@@ -324,7 +324,10 @@
++       goto out;
++    }
++ 
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++    dev->priv = netIf;
+++#endif /* 2.6.29 */
+++ 
++    netIf->dev = dev;
++    
++    memcpy(dev->dev_addr, netIf->port.paddr, sizeof netIf->port.paddr);
++@@ -566,7 +569,11 @@
++ VNetNetifStartXmit(struct sk_buff    *skb, // IN:
++                    struct net_device *dev) // IN:
++ {
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
+++#else
+++   VNetNetIF *netIf = netdev_priv(dev);
+++#endif /* 2.6.29 */
++ 
++    if(skb == NULL) {
++       return 0;
++@@ -618,7 +625,12 @@
++ VNetNetifSetMAC(struct net_device *dev, // IN:
++                 void *p)                // IN:
++ {
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
+++#else
+++   VNetNetIF *netIf = netdev_priv(dev);
+++#endif /* 2.6.29 */
+++
++    struct sockaddr const *addr = p;
++    if (!VMX86_IS_STATIC_MAC(addr->sa_data)) {
++       return -EINVAL;
++@@ -675,7 +687,11 @@
++ struct net_device_stats *
++ VNetNetifGetStats(struct net_device *dev) // IN:
++ {
+++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29)
++    VNetNetIF *netIf = (VNetNetIF*)dev->priv;
+++#else
+++   VNetNetIF *netIf = netdev_priv(dev);
+++#endif /* 2.6.29 */
++    return &(netIf->stats);
++ }
++ 

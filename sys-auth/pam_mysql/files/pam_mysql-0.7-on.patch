@@ -1,0 +1,273 @@
+--- pam_mysql.c.bak	2006-01-09 17:35:59 +0700
++++ pam_mysql.c	2006-06-27 12:20:26 +0800
+@@ -175,6 +175,8 @@
+ #define PLEASE_ENTER_OLD_PASSWORD "(Current) Password:"
+ #define PLEASE_ENTER_NEW_PASSWORD "(New) Password:"
+ #define PLEASE_REENTER_NEW_PASSWORD "Retype (New) Password:"
++#define SEPARATOR "~"
++#define SPACE " "
+ 
+ /* {{{ consts  */
+ enum _pam_mysql_err_t {
+@@ -223,6 +225,10 @@
+ 	char *usercolumn;
+ 	char *passwdcolumn;
+ 	char *statcolumn;
++	char *onstart;
++	char *onclose;
++	char *onacctok;
++	char *onacctexpired;
+ 	int crypt_type;
+ 	int use_323_passwd;
+ 	int md5;
+@@ -779,6 +785,10 @@
+ 	PAM_MYSQL_DEF_OPTION(usercolumn, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION(passwdcolumn, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION(statcolumn, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION(onstart, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION(onclose, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION(onacctok, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION(onacctexpired, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(crypt, crypt_type, &pam_mysql_crypt_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION(md5, &pam_mysql_boolean_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION(sqllog, &pam_mysql_boolean_opt_accr),
+@@ -1676,6 +1686,10 @@
+ 	PAM_MYSQL_DEF_OPTION2(users.user_column, usercolumn, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(users.password_column, passwdcolumn, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(users.status_column, statcolumn, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION2(users.on_start, onstart, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION2(users.on_close, onclose, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION2(users.on_acct_ok, onacctok, &pam_mysql_string_opt_accr),
++	PAM_MYSQL_DEF_OPTION2(users.on_acct_expired, onacctexpired, &pam_mysql_string_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(users.password_crypt, crypt_type, &pam_mysql_crypt_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(users.use_md5, md5, &pam_mysql_boolean_opt_accr),
+ 	PAM_MYSQL_DEF_OPTION2(verbose, verbose, &pam_mysql_boolean_opt_accr),
+@@ -1953,6 +1967,10 @@
+ 	ctx->usercolumn = NULL;
+ 	ctx->passwdcolumn = NULL;
+ 	ctx->statcolumn = xstrdup("0");
++	ctx->onstart = NULL;
++	ctx->onclose = NULL;
++	ctx->onacctok = NULL;
++	ctx->onacctexpired = NULL;
+ 	ctx->crypt_type = 0;
+ 	ctx->use_323_passwd = 0;
+ 	ctx->md5 = -1;
+@@ -3527,6 +3545,11 @@
+ 	const char *user;
+ 	const char *rhost;
+ 	pam_mysql_ctx_t *ctx = NULL;
++	pam_mysql_str_t query;
++	pam_mysql_err_t sql_err;
++	size_t i;
++	char *sep = SEPARATOR;
++	char *space = SPACE;
+ 
+ 	switch (pam_mysql_retrieve_ctx(&ctx, pamh)) {
+ 		case PAM_MYSQL_ERR_SUCCESS:
+@@ -3646,6 +3669,94 @@
+ 		}
+ 	}
+ 
++        if (retval == PAM_SUCCESS) {
++          if(ctx->onacctok != NULL) {
++            for (i=0; i<strlen(ctx->onacctok); i++)
++              {
++                if (ctx->onacctok[i] == *sep) ctx->onacctok[i] = *space;
++              }
++
++            if (ctx->verbose) {
++              syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctok0: %s", ctx->onacctok);
++            }
++
++            if ((sql_err = pam_mysql_str_init(&query, 0))) {
++              retval = PAM_SERVICE_ERR;
++              goto out;
++            }
++
++            sql_err = pam_mysql_format_string(ctx, &query, "%s WHERE %[usercolumn] = '%s'", 1, ctx->onacctok, user);
++            if (ctx->verbose) {
++              syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctok1: %s", query.p);
++            }
++        
++            if (sql_err) {
++              retval = PAM_SERVICE_ERR;
++              goto out;
++            }
++
++#ifdef HAVE_MYSQL_REAL_QUERY
++            if (mysql_real_query(ctx->mysql_hdl, query.p, query.len)) {
++#else
++              if (mysql_query(ctx->mysql_hdl, query.p)) {
++#endif
++                if (ctx->verbose) {
++                  syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctok2:");
++                }
++                retval = PAM_AUTHINFO_UNAVAIL;
++                goto out;
++              }
++
++              if (ctx->verbose) {
++            	syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctok: %s", query.p);
++              }
++            }
++
++          }
++          else {
++            if(ctx->onacctexpired != NULL) {
++              for (i=0; i<strlen(ctx->onacctexpired); i++)
++                {
++                  if (ctx->onacctexpired[i] == *sep) ctx->onacctexpired[i] = *space;
++                }
++
++              if (ctx->verbose) {
++                syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctexpired0: %s", ctx->onacctexpired);
++              }
++
++              if ((sql_err = pam_mysql_str_init(&query, 0))) {
++                retval = PAM_SERVICE_ERR;
++                goto out;
++              }
++
++              sql_err = pam_mysql_format_string(ctx, &query, "%s", 1, ctx->onacctexpired);
++              if (ctx->verbose) {
++                syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctexpired1: %s", query.p);
++              }
++        
++              if (sql_err) {
++                retval = PAM_SERVICE_ERR;
++                goto out;
++              }
++
++#ifdef HAVE_MYSQL_REAL_QUERY
++              if (mysql_real_query(ctx->mysql_hdl, query.p, query.len)) {
++#else
++                if (mysql_query(ctx->mysql_hdl, query.p)) {
++#endif
++                  if (ctx->verbose) {
++                    syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctexpired2:");
++                  }
++                  retval = PAM_AUTHINFO_UNAVAIL;
++                  goto out;
++                }
++
++                if (ctx->verbose) {
++                  syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onacctexpired: %s", query.p);
++                }
++              }
++            }
++
+ out:
+ 	if (ctx->disconnect_every_op) {
+ 		pam_mysql_close_db(ctx);
+@@ -4061,6 +4172,11 @@
+ 	pam_mysql_ctx_t *ctx = NULL;
+ 	const char *user;
+ 	const char *rhost;
++	pam_mysql_str_t query;
++	pam_mysql_err_t err;
++	size_t i;
++	char *sep = SEPARATOR;
++	char *space = SPACE;
+ 
+ 	switch (pam_mysql_retrieve_ctx(&ctx, pamh)) {
+ 		case PAM_MYSQL_ERR_SUCCESS:
+@@ -4141,6 +4257,48 @@
+ 	}
+ 
+ 	pam_mysql_sql_log(ctx, "OPEN SESSION", user, rhost);
++        
++        if(ctx->onstart != NULL) {
++          for (i=0; i<strlen(ctx->onstart); i++)
++            {
++              if (ctx->onstart[i] == *sep) ctx->onstart[i] = *space;
++            }
++
++          if (ctx->verbose) {
++            syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onstart0: %s", ctx->onstart);
++          }
++
++          if ((err = pam_mysql_str_init(&query, 0))) {
++            return err;
++          }
++
++          err = pam_mysql_format_string(ctx, &query, "%s", 1, ctx->onstart);
++          if (ctx->verbose) {
++            syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onstart1: %s", query.p);
++          }
++        
++          if (err) {
++            retval = PAM_SERVICE_ERR;
++            goto out;
++          }
++
++#ifdef HAVE_MYSQL_REAL_QUERY
++          if (mysql_real_query(ctx->mysql_hdl, query.p, query.len)) {
++#else
++            if (mysql_query(ctx->mysql_hdl, query.p)) {
++#endif
++              retval = PAM_MYSQL_ERR_DB;
++              if (ctx->verbose) {
++                syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onstart2:");
++              }
++
++              goto out;
++            }
++
++            if (ctx->verbose) {
++            	syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onstart: %s", query.p);
++            }
++          }
+ 
+ out:
+ 	if (ctx->disconnect_every_op) {
+@@ -4164,6 +4322,11 @@
+ 	pam_mysql_ctx_t *ctx = NULL;
+ 	const char *user;
+ 	const char *rhost;
++	pam_mysql_str_t query;
++	pam_mysql_err_t err;
++	size_t i;
++	char *sep = SEPARATOR;
++	char *space = SPACE;
+ 
+ 	switch (pam_mysql_retrieve_ctx(&ctx, pamh)) {
+ 		case PAM_MYSQL_ERR_SUCCESS:
+@@ -4245,6 +4408,37 @@
+ 
+ 	pam_mysql_sql_log(ctx, "CLOSE SESSION", user, rhost);
+ 
++        if(ctx->onclose != NULL) {
++          for (i=0; i<strlen(ctx->onclose); i++)
++            {
++              if (ctx->onclose[i] == *sep) ctx->onclose[i] = *space;
++            }
++
++          if ((err = pam_mysql_str_init(&query, 0))) {
++            return err;
++          }
++
++          err = pam_mysql_format_string(ctx, &query, "%s", 1, ctx->onclose);
++        
++          if (err) {
++            retval = PAM_SERVICE_ERR;
++            goto out;
++          }
++
++#ifdef HAVE_MYSQL_REAL_QUERY
++          if (mysql_real_query(ctx->mysql_hdl, query.p, query.len)) {
++#else
++            if (mysql_query(ctx->mysql_hdl, query.p)) {
++#endif
++              retval = PAM_MYSQL_ERR_DB;
++              goto out;
++            }
++
++            if (ctx->verbose) {
++              syslog(LOG_AUTHPRIV | LOG_ERR, PAM_MYSQL_LOG_PREFIX "onclose: %s", query.p);
++            }
++          }
++
+ out:
+ 	if (ctx->disconnect_every_op) {
+ 		pam_mysql_close_db(ctx);

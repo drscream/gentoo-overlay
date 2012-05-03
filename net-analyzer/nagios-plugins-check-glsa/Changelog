@@ -1,0 +1,15 @@
+# ChangeLog for net-analyzer/nagios-plugins-check-glsa
+# Distributed under the GPL v2
+# $Id: Changelog 8 2008-07-30 09:33:09Z georg.weiss $
+
+*nagios-plugins-check-glsa-0.4 (30 Jul 2008)
+  
+  30 Jul 2008; Georg Weiss <georg@georgweiss.de>
+  +nagios-plugins-check-glsa-0.4
+  move check_glsa.sh to filesdir
+
+*nagios-plugins-check-glsa-0.2 (20 Mar 2008)
+  
+  20 Mar 2008; Georg Weiss <georg@georgweiss.de>
+  +nagios-plugins-check-glsa-0.2
+  version bump

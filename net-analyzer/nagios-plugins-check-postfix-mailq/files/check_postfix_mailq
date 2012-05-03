@@ -1,0 +1,245 @@
+#! /usr/bin/perl -w
+
+# check_mailq - check to see how many messages are in the smtp queue awating
+#   transmittal.  
+#
+# Initial version support sendmail's mailq command
+#  Support for mutiple sendmail queues (Carlos Canau)
+#  Support for qmail (Benjamin Schmid)
+
+# License Information:
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+#
+############################################################################
+
+use POSIX;
+use strict;
+use Getopt::Long;
+use vars qw($opt_V $opt_h $opt_v $verbose $PROGNAME $opt_w $opt_c $opt_t
+					$opt_F $mailq_cfg $status $state $msg $msg_q $msg_p $opt_W $opt_C $mailq_cfg @lines
+					%srcdomains %dstdomains);
+use lib  "/usr/lib64/nagios/plugins";
+use utils qw(%ERRORS &print_revision &support &usage );
+
+
+sub print_help ();
+sub print_usage ();
+sub process_arguments ();
+
+$ENV{'PATH'}='';
+$ENV{'BASH_ENV'}=''; 
+$ENV{'ENV'}='';
+$PROGNAME = "check_mailq";
+$mailq_cfg = '/etc/postfix/main.cf';
+$msg_q = 0 ;
+$msg_p = 0 ;
+$state = $ERRORS{'UNKNOWN'};
+
+Getopt::Long::Configure('bundling');
+$status = process_arguments();
+if ($status){
+	print "ERROR: processing arguments\n";
+	exit $ERRORS{"UNKNOWN"};
+}
+
+$SIG{'ALRM'} = sub {
+	print ("ERROR: timed out waiting for $utils::PATH_TO_MAILQ \n");
+	exit $ERRORS{"WARNING"};
+};
+alarm($opt_t);
+
+     ## open mailq
+if ( defined $utils::PATH_TO_MAILQ && -x $utils::PATH_TO_MAILQ ) {
+        if (! open (MAILQ, "$utils::PATH_TO_MAILQ -C $mailq_cfg | " ) ) {
+                print "ERROR: could not open $utils::PATH_TO_MAILQ \n";
+                exit $ERRORS{'UNKNOWN'};
+        }
+}elsif( defined $utils::PATH_TO_MAILQ){
+        unless (-x $utils::PATH_TO_MAILQ) {
+                print "ERROR: $utils::PATH_TO_MAILQ is not executable by (uid $>:gid($)))\n";
+                exit $ERRORS{'UNKNOWN'};
+        }
+} else {
+        print "ERROR: \$utils::PATH_TO_MAILQ is not defined\n";
+        exit $ERRORS{'UNKNOWN'};
+}
+
+
+@lines = reverse <MAILQ>;
+
+# close qmail-qstat
+close MAILQ;
+
+if ( $? ) {
+		print "CRITICAL: Error code ".($?>>8)." returned from $utils::PATH_TO_MAILQ",$/;
+		exit $ERRORS{CRITICAL};
+}
+
+## shut off the alarm
+alarm(0);
+
+# check queue length
+if ($lines[0]=~/Kbytes in (\d+)/) {
+        $msg_q = $1 ;
+	}elsif ($lines[0]=~/Mail queue is empty/) {
+		$msg_q = 0;
+}else{
+        print "Couldn't match $utils::PATH_TO_QMAIL_QSTAT output\n";
+        exit   $ERRORS{'UNKNOWN'};
+}
+
+# check messages not processed
+#if ($lines[1]=~/^messages in queue but not yet preprocessed: (\d+)/) {
+#        my $msg_p = $1;
+#}else{
+#        print "Couldn't match $utils::PATH_TO_QMAIL_QSTAT output\n";
+#        exit  $ERRORS{'UNKNOWN'};
+#}
+
+# check queue length(s)
+if ($msg_q == 0){
+        $msg = "OK: mailq reports queue is empty";
+        $state = $ERRORS{'OK'};
+} else {
+        print "msg_q = $msg_q warn=$opt_w crit=$opt_c\n" if $verbose;
+
+        # overall queue length
+        if ($msg_q < $opt_w) {
+                $msg = "OK: mailq ($msg_q) is below threshold ($opt_w/$opt_c)";
+                $state = $ERRORS{'OK'};
+        }elsif  ($msg_q >= $opt_w  && $msg_q < $opt_c) {
+                $msg = "WARNING: mailq is $msg_q (threshold w = $opt_w)";
+                $state = $ERRORS{'WARNING'};
+        }else {
+                $msg = "CRITICAL: mailq is $msg_q (threshold c = $opt_c)";
+                $state = $ERRORS{'CRITICAL'};
+        }
+
+        # check messages not yet preprocessed (only compare is $opt_W and $opt_C
+        # are defined)
+
+        #if (defined $opt_W) {
+        #        $msg .= "[Preprocessed = $msg_p]";
+        #        if ($msg_p >= $opt_W && $msg_p < $opt_C ) {
+        #                $state = $state == $ERRORS{"CRITICAL"} ? $ERRORS{"CRITICAL"} : $ERRORS{"WARNING"}  ;
+        #        }elsif ($msg_p >= $opt_C ) {
+        #                $state = $ERRORS{"CRITICAL"} ;
+        #        }
+        #}
+}
+
+# Perfdata support
+print "$msg|unsent=$msg_q;$opt_w;$opt_c;0\n";
+exit $state;
+
+
+#####################################
+#### subs
+
+
+sub process_arguments(){
+	GetOptions
+		("V"   => \$opt_V, "version"	=> \$opt_V,
+		 "v"   => \$opt_v, "verbose"	=> \$opt_v,
+		 "h"   => \$opt_h, "help"		=> \$opt_h,
+		 "F:s" => \$opt_F, "configfile:s" => \$opt_F, # path to config file
+		 "w=i" => \$opt_w, "warning=i"  => \$opt_w,   # warning if above this number
+		 "c=i" => \$opt_c, "critical=i" => \$opt_c,	  # critical if above this number
+		 "t=i" => \$opt_t, "timeout=i"  => \$opt_t 
+		 );
+
+	if ($opt_V) {
+		print_revision($PROGNAME,'1.4.15');
+		exit $ERRORS{'OK'};
+	}
+
+	if ($opt_h) {
+		print_help();
+		exit $ERRORS{'OK'};
+	}
+
+	if (defined $opt_v ){
+		$verbose = $opt_v;
+	}
+
+	unless (defined $opt_t) {
+		$opt_t = $utils::TIMEOUT ;	# default timeout
+	}
+
+	unless (  defined $opt_w &&  defined $opt_c ) {
+		print_usage();
+		exit $ERRORS{'UNKNOWN'};
+	}
+
+	if ( $opt_w >= $opt_c) {
+		print "Warning (-w) cannot be greater than Critical (-c)!\n";
+		exit $ERRORS{'UNKNOWN'};
+	}
+
+	if (defined $opt_W && ! defined !$opt_C) {
+		print "Need -C if using -W\n";
+		exit $ERRORS{'UNKNOWN'};
+	}elsif(defined $opt_W && defined $opt_C) {
+		if ($opt_W >= $opt_C) {
+			print "Warning (-W) cannot be greater than Critical (-C)!\n";
+			exit $ERRORS{'UNKNOWN'};
+		}
+	}
+
+	if (defined $opt_F) {
+		if( $opt_F eq ''){
+			$mailq_cfg = '/etc/postfix/main.cf';
+		}
+		$mailq_cfg = $opt_F ;
+	}else{
+		$mailq_cfg = '/etc/postfix/main.cf' ;
+	}
+		
+	return $ERRORS{'OK'};
+}
+
+sub print_usage () {
+	print "Usage: $PROGNAME -w <warn> -c <crit> [-W <warn>] [-C <crit>] [-F <config>] [-t <timeout>] [-v verbose]\n";
+}
+
+sub print_help () {
+	print_revision($PROGNAME,'1.4.15');
+	print "Copyright (c) 2002 Subhendu Ghosh/Carlos Canau/Benjamin Schmid\n";
+	print "\n";
+	print_usage();
+	print "\n";
+	print "   Checks the number of messages in the mail queue (supports multiple sendmail queues, qmail)\n";
+	print "   Feedback/patches to support non-sendmail mailqueue welcome\n\n";
+	print "-w (--warning)    = Min. number of messages in queue to generate warning\n";
+	print "-c (--critical)   = Min. number of messages in queue to generate critical alert ( w < c )\n";
+	print "-W (--Warning)    = Min. number of messages for same domain in queue to generate warning\n";
+	print "-C (--Critical)   = Min. number of messages for same domain in queue to generate critical alert ( W < C )\n";
+	print "-t (--timeout)    = Plugin timeout in seconds (default = $utils::TIMEOUT)\n";
+	print "-F (--configfile) = Path to the postfix config file (default = /etc/postfix/main.cf)\n";
+	print "-h (--help)\n";
+	print "-V (--version)\n";
+	print "-v (--verbose)   = debugging output\n";
+	print "\n\n";
+	print "Note: -w and -c are required arguments.  -W and -C are optional.\n";
+	print " -W and -C are applied to domains listed on the queues - both FROM and TO. (sendmail)\n";
+	print " -W and -C are applied message not yet preproccessed. (qmail)\n";
+	print " This plugin uses the system mailq command (sendmail) or qmail-stat (qmail)\n";
+	print " to look at the queues. Mailq can usually only be accessed by root or \n";
+	print " a TrustedUser. You will have to set appropriate permissions for the plugin to work.\n";
+	print "";
+	print "\n\n";
+	support();
+}
